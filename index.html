@@ -240,9 +240,19 @@
      APP UI
      ══════════════════════════════════════════ -->
 <div id="app-header">
-  <div id="header-eyebrow">Run Report</div>
-  <div id="header-title">Aurelius Fire &amp; Rescue</div>
-  <div id="header-sub" id="header-sub-text">Loading…</div>
+  <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px">
+    <div>
+      <div id="header-eyebrow">Run Report</div>
+      <div id="header-title">Aurelius Fire &amp; Rescue</div>
+      <div id="header-sub">Loading…</div>
+    </div>
+    <button id="reload-btn" title="Reload personnel roster" onclick="reloadPersonnel()"
+      style="background:rgba(255,255,255,0.15);border:1.5px solid rgba(255,255,255,0.35);
+             color:#fff;border-radius:8px;padding:6px 10px;font-size:12px;font-weight:600;
+             white-space:nowrap;margin-top:6px;flex-shrink:0;font-family:Georgia,serif">
+      🔄 Reload Roster
+    </button>
+  </div>
   <div id="tab-bar"></div>
 </div>
 
@@ -691,31 +701,65 @@ function tabTimes() {
 
 function tabDispatch() {
   const wrap = document.createElement('div');
-
-  // Actual dispatch text at the top
-  wrap.appendChild(card('Actual Dispatch',
-    field('Dispatch Description', inp(F.dispActual||'', v=>{F.dispActual=v;saveForm();}, {placeholder:'Enter the actual dispatch text…'}))
-  ));
-
   const allTypes = [...DISPATCH_TYPES, ...DISPATCH_SPECIAL];
+
   const togglesWrap = document.createElement('div');
   for (const d of allTypes) {
-    togglesWrap.appendChild(toggle(d.label, d.code, F.dispType===d.code, on => {
+    const isSelected = F.dispType === d.code;
+
+    // Toggle button
+    const tog = toggle(d.label, d.code, isSelected, on => {
       F.dispType = on ? d.code : '';
+      if (!on) { F.dispActual = ''; F.dispDetail = ''; }
       saveForm();
       renderTab();
-    }));
-  }
-  const c = card('Dispatch Type', togglesWrap);
+    });
+    togglesWrap.appendChild(tog);
 
-  if (['STR','VEH','OUT','ELE','OTH'].includes(F.dispType)) {
-    const detailWrap = document.createElement('div');
-    detailWrap.style.marginTop = '10px';
-    detailWrap.appendChild(lbl('Details'));
-    detailWrap.appendChild(inp(F.dispDetail, v=>{F.dispDetail=v;saveForm();}, {placeholder:'Describe…'}));
-    c.querySelector('.card-body').appendChild(detailWrap);
+    // If this type is selected, show the text entry inline right below it
+    if (isSelected) {
+      const textBox = document.createElement('div');
+      Object.assign(textBox.style, {
+        background: '#fff8f0',
+        border: '1.5px solid #8b0000',
+        borderTop: 'none',
+        borderRadius: '0 0 8px 8px',
+        padding: '10px 12px',
+        marginBottom: '7px',
+        marginTop: '-7px',
+      });
+
+      const textLbl = document.createElement('div');
+      textLbl.className = 'lbl';
+      textLbl.textContent = 'Actual Dispatch Text';
+      textLbl.style.marginBottom = '5px';
+      textBox.appendChild(textLbl);
+
+      const ta = document.createElement('textarea');
+      ta.className = 'ta';
+      ta.rows = 3;
+      ta.placeholder = 'Enter the actual dispatch text received…';
+      ta.value = F.dispActual || '';
+      Object.assign(ta.style, { fontSize: '14px', lineHeight: '1.4' });
+      ta.addEventListener('input', e => { F.dispActual = e.target.value; saveForm(); });
+      textBox.appendChild(ta);
+
+      // Extra detail line for special types
+      if (['STR','VEH','OUT','ELE','OTH'].includes(d.code)) {
+        const detLbl = document.createElement('div');
+        detLbl.className = 'lbl';
+        detLbl.textContent = 'Additional Details';
+        detLbl.style.cssText = 'margin-top:8px;margin-bottom:4px';
+        textBox.appendChild(detLbl);
+        const detInp = inp(F.dispDetail||'', v=>{ F.dispDetail=v; saveForm(); }, { placeholder:'e.g. address, structure type…' });
+        textBox.appendChild(detInp);
+      }
+
+      togglesWrap.appendChild(textBox);
+    }
   }
-  wrap.appendChild(c);
+
+  wrap.appendChild(card('Dispatched As', togglesWrap));
   return wrap;
 }
 
@@ -1176,6 +1220,34 @@ function render() {
   renderTabBar();
   renderTab();
   renderNav();
+}
+
+// ── Reload personnel roster on demand ──────────────────
+async function reloadPersonnel() {
+  const btn = document.getElementById('reload-btn');
+  const orig = btn.textContent;
+  btn.textContent = '⏳ Loading…';
+  btn.disabled = true;
+  try {
+    await loadPersonnel();
+    btn.textContent = '✓ Updated!';
+    btn.style.background = 'rgba(45,106,45,0.7)';
+    // Re-render current tab in case Personnel tab is open
+    renderTab();
+    setTimeout(() => {
+      btn.textContent = orig;
+      btn.style.background = 'rgba(255,255,255,0.15)';
+      btn.disabled = false;
+    }, 2000);
+  } catch(e) {
+    btn.textContent = '✗ Failed';
+    btn.style.background = 'rgba(139,0,0,0.5)';
+    setTimeout(() => {
+      btn.textContent = orig;
+      btn.style.background = 'rgba(255,255,255,0.15)';
+      btn.disabled = false;
+    }, 2500);
+  }
 }
 
 // Show a loading state then boot once personnel are ready
