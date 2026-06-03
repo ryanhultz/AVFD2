@@ -79,6 +79,7 @@
     }
     .inp, .sel, .ta {
       width: 100%;
+      box-sizing: border-box;
       background: #fff8f0;
       border: 1.5px solid #c8a97a;
       border-radius: 6px;
@@ -87,6 +88,7 @@
       color: #1a1a1a;
       outline: none;
       font-family: Georgia, serif;
+      display: block;
     }
     .ta { resize: vertical; }
     .field-row { margin-bottom: 10px; }
@@ -367,7 +369,7 @@ const LOCATIONS = [
 ];
 
 const APPARATUS = ["Rescue 2","Engine 1","Engine 2","Rescue 1","Chief's Vehicle","Quint 1","Squad 1","Squad 2","Squad 3","Tanker 1"];
-const TABS = ["Incident","Times","Dispatch","Apparatus","Personnel","MVA","EMS","Remarks","Preview"];
+const TABS = ["Incident","Times","Dispatch","Apparatus","Personnel","MVA","EMS","Law","Remarks","Preview"];
 
 const EMPTY = {
   date:"", runNum:"15-", ic:"", enteredBy:"", badge:"", entryDate:"",
@@ -376,10 +378,10 @@ const EMPTY = {
   apparatus:{}, apparatusDriver:{}, personnel:{},
   emtCt:"", intCt:"", totalCt:"",
   injName:"", injNum:"", rptFiled:"",
-  amb:[{svc:"",custom:"",als:""},{svc:"",custom:"",als:""},{svc:"",custom:"",als:""}],
-  pcr:"",
+  amb:[{svc:"",custom:"",pcr:""},{svc:"",custom:"",pcr:""},{svc:"",custom:"",pcr:""}],
+  refusedPcr:["","",""],
   law:["","",""],
-  cars:[{model:"",plate:"",color:""},{model:"",plate:"",color:""},{model:"",plate:"",color:""}],
+  cars:[{model:"",plate:"",color:""},{model:"",plate:"",color:""},{model:"",plate:"",color:""},{model:"",plate:"",color:""},{model:"",plate:"",color:""},{model:"",plate:"",color:""}],
   mutual:"", remarks:"", reportBy:"", pg:"1", pgOf:"1",
 };
 
@@ -404,9 +406,10 @@ function saveForm() {
 function clearForm() {
   if (!confirm("Clear all form data and start fresh?")) return;
   F = Object.assign({}, EMPTY,{
-    amb:[{svc:"",custom:"",als:""},{svc:"",custom:"",als:""},{svc:"",custom:"",als:""}],
+    amb:[{svc:"",custom:"",pcr:""},{svc:"",custom:"",pcr:""},{svc:"",custom:"",pcr:""}],
+    refusedPcr:["","",""],
     law:["","",""],
-    cars:[{model:"",plate:"",color:""},{model:"",plate:"",color:""},{model:"",plate:"",color:""}],
+    cars:[{model:"",plate:"",color:""},{model:"",plate:"",color:""},{model:"",plate:"",color:""},{model:"",plate:"",color:""},{model:"",plate:"",color:""},{model:"",plate:"",color:""}],
     apparatus:{}, personnel:{},
   });
   try { localStorage.removeItem("afr_v4"); } catch(e) {}
@@ -542,30 +545,137 @@ function timeInput(labelText, value, onChange) {
   return w;
 }
 
-function ambRow(i) {
+function ambRow(i, renderFn) {
   const a = F.amb[i];
   const wrap = document.createElement('div');
 
-  const svcOpts = [["","— Select —"], ...AMB_SERVICES.map(s=>[s,s])];
+  // Service dropdown
+  const svcOpts = [["","— Select Service —"], ...AMB_SERVICES.map(s=>[s,s])];
   wrap.appendChild(lbl('Service'));
   const svcSel = sel(a.svc, svcOpts, v => {
     F.amb[i] = {...F.amb[i], svc:v, custom:""};
     saveForm();
-    renderTab();
+    if (renderFn) renderFn();
   }, {marginBottom:'8px'});
   wrap.appendChild(svcSel);
 
+  // Custom name if "Other"
   if (a.svc === 'Other') {
-    wrap.appendChild(lbl('Enter Name'));
-    const ci = inp(a.custom, v => { F.amb[i].custom = v; saveForm(); }, {placeholder:'Service name', style:{marginBottom:'8px'}});
+    const custLbl = document.createElement('div');
+    custLbl.className = 'lbl';
+    custLbl.textContent = 'Enter Service Name';
+    custLbl.style.marginBottom = '4px';
+    wrap.appendChild(custLbl);
+    const ci = inp(a.custom, v => { F.amb[i].custom = v; saveForm(); }, {placeholder:'Service name'});
+    ci.style.marginBottom = '8px';
     wrap.appendChild(ci);
   }
 
-  wrap.appendChild(lbl('ALS?'));
-  const alsSel = sel(a.als, [["","—"],["YES","YES"],["NO","NO"]], v => {
-    F.amb[i].als = v; saveForm();
-  });
-  wrap.appendChild(alsSel);
+  // PCR # for this ambulance (only shown once a service is selected)
+  if (a.svc) {
+    const pcrLbl = document.createElement('div');
+    pcrLbl.className = 'lbl';
+    pcrLbl.textContent = 'PCR #';
+    pcrLbl.style.marginBottom = '4px';
+    wrap.appendChild(pcrLbl);
+    const pcrInp = inp(a.pcr || '', v => {
+      F.amb[i].pcr = v;
+      saveForm();
+      if (renderFn) renderFn(); // reveal next ambulance row when PCR started
+    }, {placeholder:'PCR number…'});
+    wrap.appendChild(pcrInp);
+  }
+
+  return wrap;
+}
+
+function tabEMS() {
+  const wrap = document.createElement('div');
+
+  // ── Ambulances — progressive reveal ─────────────────────
+  const emsCard = document.createElement('div');
+  emsCard.className = 'card';
+  const emsTitle = document.createElement('div');
+  emsTitle.className = 'card-title';
+  emsTitle.textContent = 'Ambulances Used';
+  const emsBody = document.createElement('div');
+  emsBody.className = 'card-body';
+  emsCard.appendChild(emsTitle);
+  emsCard.appendChild(emsBody);
+
+  function renderAmb() {
+    emsBody.innerHTML = '';
+    // Show next only when previous has a service selected
+    const show = [
+      true,
+      !!(F.amb[0].svc),
+      !!(F.amb[1].svc),
+    ];
+    for (let i = 0; i < 3; i++) {
+      if (!show[i]) continue;
+      if (i > 0) {
+        const div = document.createElement('div');
+        div.style.cssText = 'border-top:1px solid #f0e8d8;margin:12px 0 12px';
+        emsBody.appendChild(div);
+      }
+      const rowTitle = document.createElement('div');
+      rowTitle.style.cssText = 'font-size:11px;font-weight:700;color:#8b0000;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px';
+      rowTitle.textContent = `Ambulance ${i + 1}`;
+      emsBody.appendChild(rowTitle);
+      emsBody.appendChild(ambRow(i, renderAmb));
+    }
+    const hint = document.createElement('div');
+    hint.style.cssText = 'font-size:11px;color:#aaa;margin-top:8px';
+    hint.textContent = 'Next ambulance appears after a service is selected.';
+    emsBody.appendChild(hint);
+  }
+  renderAmb();
+  wrap.appendChild(emsCard);
+
+  // ── Refused Transport PCR — progressive reveal ───────────
+  if (!F.refusedPcr) F.refusedPcr = ["","",""];
+  const refCard = document.createElement('div');
+  refCard.className = 'card';
+  const refTitle = document.createElement('div');
+  refTitle.className = 'card-title';
+  refTitle.textContent = 'Refused Transport PCR #';
+  const refBody = document.createElement('div');
+  refBody.className = 'card-body';
+  refCard.appendChild(refTitle);
+  refCard.appendChild(refBody);
+
+  function renderRefused() {
+    refBody.innerHTML = '';
+    const show = [
+      true,
+      !!(F.refusedPcr[0] && F.refusedPcr[0].trim()),
+      !!(F.refusedPcr[1] && F.refusedPcr[1].trim()),
+    ];
+    for (let i = 0; i < 3; i++) {
+      if (!show[i]) continue;
+      const rowWrap = document.createElement('div');
+      rowWrap.style.marginBottom = '8px';
+      const rl = document.createElement('div');
+      rl.className = 'lbl';
+      rl.style.marginBottom = '4px';
+      rl.textContent = `Refused Transport PCR #${i + 1}`;
+      rowWrap.appendChild(rl);
+      const ri = inp(F.refusedPcr[i] || '', v => {
+        F.refusedPcr[i] = v;
+        saveForm();
+        renderRefused();
+      }, {placeholder:'PCR number…'});
+      rowWrap.appendChild(ri);
+      refBody.appendChild(rowWrap);
+    }
+    const hint2 = document.createElement('div');
+    hint2.style.cssText = 'font-size:11px;color:#aaa;margin-top:4px';
+    hint2.textContent = 'Additional fields appear as each PCR # is entered.';
+    refBody.appendChild(hint2);
+  }
+  renderRefused();
+  wrap.appendChild(refCard);
+
   return wrap;
 }
 
@@ -575,34 +685,82 @@ function ambRow(i) {
 function tabIncident() {
   const wrap = document.createElement('div');
 
-  // Helper: native date input that displays as MM/DD/YYYY on mobile
+  // Single shared style applied to every input/select in this card
+  const UNI = {
+    width: '100%',
+    boxSizing: 'border-box',
+    height: '46px',
+    padding: '0 12px',
+    fontSize: '16px',
+    lineHeight: '46px',
+    display: 'block',
+  };
+
   function dateInp(value, onChange) {
     const el = document.createElement('input');
     el.type = 'date';
     el.className = 'inp';
     el.value = value || '';
-    // Force numeric keyboard on mobile and keep it compact
     el.setAttribute('inputmode', 'numeric');
-    Object.assign(el.style, { fontSize:'16px', padding:'9px 8px' });
+    Object.assign(el.style, UNI, { textAlign: 'left', justifyContent: 'flex-start' });
     el.addEventListener('change', e => onChange(e.target.value));
     return el;
   }
 
-  wrap.appendChild(card('Incident Info',
-    field('Date', dateInp(F.date, v=>{F.date=v;saveForm();updateHeader();}), 10),
-    field('Run Report #', inp(F.runNum, v=>{F.runNum=v;saveForm();updateHeader();}, {placeholder:'15-0602'}), 10),
-    field('Incident Commander', inp(F.ic, v=>{F.ic=v;saveForm();}, {placeholder:'Name'}), 10),
-    field('Entered By', inp(F.enteredBy, v=>{F.enteredBy=v;saveForm();}, {placeholder:'Name'}), 10),
-    flexRow(
-      flexCol(1, lbl('Badge #'), inp(F.badge, v=>{F.badge=v;saveForm();})),
-      flexCol(1, lbl('Entry Date'), dateInp(F.entryDate, v=>{F.entryDate=v;saveForm();}))
-    )
-  ));
-  const locOpts = [["","— Select —"], ...LOCATIONS.map(l=>[l.code, l.code+" – "+l.label])];
-  wrap.appendChild(card('Location / Address',
-    field('Location Type', sel(F.locCode, locOpts, v=>{F.locCode=v;saveForm();}, {marginBottom:'10px'}), 10),
-    field('Street Address', inp(F.address, v=>{F.address=v;saveForm();}, {placeholder:'Address'}))
-  ));
+  function persDropdown(currentVal, onChange) {
+    const opts = [["","— Select —"], ...PERSONNEL.map(p=>[p.badge, p.name])];
+    const el = sel(currentVal, opts, onChange);
+    Object.assign(el.style, UNI);
+    return el;
+  }
+
+  function textInp(value, onChange, placeholder) {
+    const el = inp(value, onChange, {placeholder});
+    Object.assign(el.style, UNI);
+    return el;
+  }
+
+  // ── Incident Info card ──────────────────────────────────
+  const infoCard = card('Incident Info',
+    field('Date',                dateInp(F.date,       v=>{F.date=v;      saveForm();updateHeader();}), 10),
+    field('Run Report #',        textInp(F.runNum,     v=>{F.runNum=v;    saveForm();updateHeader();}, '15-0602'), 10),
+    field('Incident Commander',  persDropdown(F.ic,    v=>{F.ic=v;        saveForm();}), 0)
+  );
+  wrap.appendChild(infoCard);
+
+  // ── Location / Address card ─────────────────────────────
+  const locOpts = [["","— Select Location Type —"], ...LOCATIONS.map(l=>[l.code, l.code+" – "+l.label])];
+  const locSel = sel(F.locCode, locOpts, v=>{
+    F.locCode = v;
+    saveForm();
+    addrWrap.style.display = v ? 'block' : 'none';
+  });
+  Object.assign(locSel.style, UNI);
+
+  const addrInp = textInp(F.address, v=>{F.address=v;saveForm();}, 'Street address…');
+  const addrWrap = document.createElement('div');
+  addrWrap.style.display = F.locCode ? 'block' : 'none';
+  addrWrap.style.marginTop = '10px';
+  addrWrap.appendChild(lbl('Street Address'));
+  addrWrap.appendChild(addrInp);
+
+  const locBody = document.createElement('div');
+  locBody.appendChild(lbl('Location Type'));
+  locBody.appendChild(locSel);
+  locBody.appendChild(addrWrap);
+
+  const locCard = document.createElement('div');
+  locCard.className = 'card';
+  const locTitle = document.createElement('div');
+  locTitle.className = 'card-title';
+  locTitle.textContent = 'Location / Address';
+  const locCardBody = document.createElement('div');
+  locCardBody.className = 'card-body';
+  locCardBody.appendChild(locBody);
+  locCard.appendChild(locTitle);
+  locCard.appendChild(locCardBody);
+  wrap.appendChild(locCard);
+
   return wrap;
 }
 
@@ -829,47 +987,396 @@ function tabPersonnel() {
       flexCol(1, lbl('EMTs'), inp(F.emtCt, v=>{F.emtCt=v;saveForm();}, {type:'number', placeholder:String(PERSONNEL.filter(p=>F.personnel[p.badge]&&p.qual&&p.qual.includes('emt')).length)+' (auto)'})),
       flexCol(1, lbl('Interior FF'), inp(F.intCt, v=>{F.intCt=v;saveForm();}, {type:'number', placeholder:String(PERSONNEL.filter(p=>F.personnel[p.badge]&&p.qual&&p.qual.includes('int')).length)+' (auto)'})),
       flexCol(1, lbl('Total'), inp(F.totalCt, v=>{F.totalCt=v;saveForm();}, {type:'number', placeholder:String(selCount)+' (auto)'}))
-    ),
-    (() => { const d=document.createElement('div'); d.style.marginBottom='10px'; return d; })(),
-    field('Personnel Injured — Name', inp(F.injName, v=>{F.injName=v;saveForm();}, {placeholder:'Name'}), 8),
-    flexRow(
-      flexCol(1, lbl('Number'), inp(F.injNum, v=>{F.injNum=v;saveForm();})),
-      flexCol(1, lbl('Report Filed'), sel(F.rptFiled, [["","—"],["YES","YES"],["NO","NO"]], v=>{F.rptFiled=v;saveForm();}))
     )
   ));
   return wrap;
 }
 
-function tabMVA() {
+// ── Common vehicles list ──────────────────────────────────
+const COMMON_VEHICLES = [
+  // Pickup Trucks
+  "Ford F-150","Ford F-250","Ford F-350",
+  "Chevrolet Silverado 1500","Chevrolet Silverado 2500","Chevrolet Silverado 3500",
+  "GMC Sierra 1500","GMC Sierra 2500","GMC Sierra 3500",
+  "Ram 1500","Ram 2500","Ram 3500",
+  "Toyota Tacoma","Toyota Tundra",
+  "Nissan Frontier","Nissan Titan",
+  // SUVs
+  "Ford Explorer","Ford Escape","Ford Edge","Ford Expedition","Ford Bronco",
+  "Chevrolet Equinox","Chevrolet Traverse","Chevrolet Tahoe","Chevrolet Suburban",
+  "GMC Acadia","GMC Yukon","GMC Terrain",
+  "Jeep Grand Cherokee","Jeep Cherokee","Jeep Wrangler","Jeep Compass",
+  "Toyota RAV4","Toyota Highlander","Toyota 4Runner","Toyota Sequoia",
+  "Honda CR-V","Honda Pilot","Honda HR-V","Honda Passport",
+  "Nissan Rogue","Nissan Murano","Nissan Pathfinder","Nissan Armada",
+  "Hyundai Tucson","Hyundai Santa Fe","Hyundai Palisade",
+  "Kia Sportage","Kia Sorento","Kia Telluride",
+  "Subaru Forester","Subaru Outback","Subaru Crosstrek",
+  "Mazda CX-5","Mazda CX-9",
+  "Dodge Durango","Dodge Journey",
+  "Lincoln Navigator","Lincoln Corsair",
+  "Cadillac Escalade","Cadillac XT5",
+  // Sedans / Cars
+  "Toyota Camry","Toyota Corolla","Toyota Prius",
+  "Honda Accord","Honda Civic",
+  "Ford Fusion","Ford Mustang",
+  "Chevrolet Malibu","Chevrolet Impala","Chevrolet Camaro",
+  "Nissan Altima","Nissan Sentra","Nissan Maxima",
+  "Hyundai Elantra","Hyundai Sonata",
+  "Kia Optima","Kia Forte",
+  "Subaru Impreza","Subaru Legacy",
+  "Dodge Charger","Dodge Challenger",
+  "Chrysler 300",
+  "Volkswagen Jetta","Volkswagen Passat","Volkswagen Tiguan",
+  "BMW 3 Series","BMW 5 Series","BMW X5",
+  "Mercedes-Benz C-Class","Mercedes-Benz E-Class","Mercedes-Benz GLE",
+  "Audi A4","Audi Q5",
+  "Lexus RX","Lexus ES",
+  // Vans / Minivans
+  "Chrysler Pacifica","Chrysler Voyager",
+  "Honda Odyssey","Toyota Sienna","Kia Carnival",
+  "Ford Transit","Ford Transit Connect",
+  "Chevrolet Express","GMC Savana",
+  "Ram ProMaster","Ram ProMaster City",
+  // Commercial / Other
+  "Box Truck","Tractor Trailer / Semi","Dump Truck","Flatbed Truck",
+  "School Bus","Coach Bus","Transit Bus",
+  "ATV / UTV","Motorcycle","Snowmobile",
+  "Other (type below)",
+];
+
+function vehicleSelector(currentVal, onChange) {
   const wrap = document.createElement('div');
-  for (let i=0; i<3; i++) {
-    wrap.appendChild(card(`Car #${i+1}`,
-      field('Model', inp(F.cars[i].model, v=>{F.cars[i].model=v;saveForm();}, {placeholder:'Year Make Model'}), 8),
-      flexRow(
-        flexCol(1, lbl('Plate #'), inp(F.cars[i].plate, v=>{F.cars[i].plate=v;saveForm();})),
-        flexCol(1, lbl('Color'),   inp(F.cars[i].color, v=>{F.cars[i].color=v;saveForm();}))
-      )
-    ));
+
+  // Determine if current value is a custom entry
+  const isCustom = currentVal && !COMMON_VEHICLES.includes(currentVal);
+  const selectVal = isCustom ? 'Other (type below)' : (currentVal || '');
+
+  const dd = document.createElement('select');
+  dd.className = 'sel';
+  dd.style.marginBottom = '8px';
+
+  // Build option list grouped by category
+  const groups = [
+    { label: '— Select Vehicle —', items: [''] },
+    { label: 'Pickup Trucks',      items: COMMON_VEHICLES.slice(0, 14) },
+    { label: 'SUVs',               items: COMMON_VEHICLES.slice(14, 46) },
+    { label: 'Cars & Sedans',      items: COMMON_VEHICLES.slice(46, 76) },
+    { label: 'Vans & Minivans',    items: COMMON_VEHICLES.slice(76, 87) },
+    { label: 'Commercial & Other', items: COMMON_VEHICLES.slice(87) },
+  ];
+
+  for (const g of groups) {
+    if (g.label === '— Select Vehicle —') {
+      const o = document.createElement('option');
+      o.value = ''; o.textContent = '— Select Vehicle —';
+      dd.appendChild(o);
+    } else {
+      const og = document.createElement('optgroup');
+      og.label = g.label;
+      for (const v of g.items) {
+        const o = document.createElement('option');
+        o.value = v; o.textContent = v;
+        if (v === selectVal) o.selected = true;
+        og.appendChild(o);
+      }
+      dd.appendChild(og);
+    }
   }
-  const lawWrap = document.createElement('div');
-  for (let i=0; i<3; i++) {
-    lawWrap.appendChild(field(`Officer ${i+1}`, inp(F.law[i], v=>{F.law[i]=v;saveForm();}, {placeholder:'Name / Badge / Agency'}), 8));
-  }
-  wrap.appendChild(card('Law Enforcement', lawWrap));
+
+  // Custom text input (shown when "Other" selected or custom value)
+  const customInp = document.createElement('input');
+  customInp.type = 'text';
+  customInp.className = 'inp';
+  customInp.placeholder = 'Year, Make, Model (e.g. 2019 Ford F-150)';
+  customInp.style.display = (selectVal === 'Other (type below)' || isCustom) ? 'block' : 'none';
+  customInp.value = isCustom ? currentVal : '';
+
+  dd.addEventListener('change', () => {
+    const v = dd.value;
+    if (v === 'Other (type below)') {
+      customInp.style.display = 'block';
+      customInp.focus();
+      onChange('');
+    } else {
+      customInp.style.display = 'none';
+      onChange(v);
+    }
+  });
+
+  customInp.addEventListener('input', () => { onChange(customInp.value); });
+
+  wrap.appendChild(dd);
+  wrap.appendChild(customInp);
   return wrap;
 }
 
-function tabEMS() {
+const VEHICLE_COLORS = [
+  "Black","White","Silver","Gray","Red","Blue","Dark Blue","Light Blue",
+  "Green","Dark Green","Brown","Tan / Beige","Gold","Yellow","Orange",
+  "Purple","Maroon / Burgundy","Pink","Teal","Cream / Off-White",
+  "Two-Tone","Other",
+];
+
+const LAW_AGENCIES = [
+  "New York State Police",
+  "Cayuga County Sheriff's Department",
+  "City of Auburn Police",
+  "Other",
+];
+
+function colorSelector(currentVal, onChange) {
+  const isCustom = currentVal && !VEHICLE_COLORS.includes(currentVal);
   const wrap = document.createElement('div');
-  for (let i=0; i<3; i++) {
-    wrap.appendChild(card(`Ambulance ${i+1}`, ambRow(i)));
+
+  const dd = document.createElement('select');
+  dd.className = 'sel';
+
+  const blank = document.createElement('option');
+  blank.value = ''; blank.textContent = '— Select Color —';
+  dd.appendChild(blank);
+
+  for (const c of VEHICLE_COLORS) {
+    const o = document.createElement('option');
+    o.value = c; o.textContent = c;
+    if (c === currentVal || (c === 'Other' && isCustom)) o.selected = true;
+    dd.appendChild(o);
   }
-  wrap.appendChild(card('PCR Numbers', field('', inp(F.pcr, v=>{F.pcr=v;saveForm();}, {placeholder:'PCR #s'}))));
+
+  const customInp = document.createElement('input');
+  customInp.type = 'text';
+  customInp.className = 'inp';
+  customInp.placeholder = 'Describe color…';
+  customInp.style.marginTop = '6px';
+  customInp.style.display = (currentVal === 'Other' || isCustom) ? 'block' : 'none';
+  customInp.value = isCustom ? currentVal : '';
+
+  dd.addEventListener('change', () => {
+    if (dd.value === 'Other') {
+      customInp.style.display = 'block';
+      customInp.focus();
+      onChange('Other');
+    } else {
+      customInp.style.display = 'none';
+      onChange(dd.value);
+    }
+  });
+  customInp.addEventListener('input', () => onChange(customInp.value));
+
+  wrap.appendChild(dd);
+  wrap.appendChild(customInp);
   return wrap;
 }
+
+function lawRow(idx, renderFn) {
+  // Build one law enforcement row: agency dropdown + optional unit/officer text
+  const current = F.law[idx] || '';
+  // stored as "Agency||UnitDetail"
+  const parts = current.split('||');
+  const agency = parts[0] || '';
+  const detail = parts[1] || '';
+  const isOther = agency === 'Other';
+  const isCustomAgency = agency && !LAW_AGENCIES.includes(agency);
+
+  const wrap = document.createElement('div');
+  wrap.style.marginBottom = '10px';
+
+  const rowLbl = document.createElement('div');
+  rowLbl.className = 'lbl';
+  rowLbl.textContent = `Officer / Unit ${idx + 1}`;
+  rowLbl.style.marginBottom = '4px';
+  wrap.appendChild(rowLbl);
+
+  const agencySel = document.createElement('select');
+  agencySel.className = 'sel';
+  agencySel.style.marginBottom = '6px';
+
+  const blankOpt = document.createElement('option');
+  blankOpt.value = ''; blankOpt.textContent = '— Select Agency —';
+  agencySel.appendChild(blankOpt);
+
+  for (const a of LAW_AGENCIES) {
+    const o = document.createElement('option');
+    o.value = a; o.textContent = a;
+    if (a === agency) o.selected = true;
+    agencySel.appendChild(o);
+  }
+
+  // Custom agency text box
+  const customAgency = document.createElement('input');
+  customAgency.type = 'text';
+  customAgency.className = 'inp';
+  customAgency.placeholder = 'Enter agency name…';
+  customAgency.style.marginBottom = '6px';
+  customAgency.style.display = isOther ? 'block' : 'none';
+  customAgency.value = isOther ? (isCustomAgency ? agency : '') : '';
+
+  // Officer / unit detail text box (shown once agency is chosen)
+  const detailInp = document.createElement('input');
+  detailInp.type = 'text';
+  detailInp.className = 'inp';
+  detailInp.placeholder = 'Officer name / badge / unit #';
+  detailInp.style.display = agency ? 'block' : 'none';
+  detailInp.value = detail;
+
+  function save() {
+    const ag = agencySel.value === 'Other'
+      ? (customAgency.value.trim() || 'Other')
+      : agencySel.value;
+    F.law[idx] = ag ? ag + '||' + detailInp.value : '';
+    saveForm();
+    if (renderFn) renderFn(); // re-render law section to show/hide next row
+  }
+
+  agencySel.addEventListener('change', () => {
+    customAgency.style.display = agencySel.value === 'Other' ? 'block' : 'none';
+    detailInp.style.display = agencySel.value ? 'block' : 'none';
+    if (agencySel.value !== 'Other') customAgency.value = '';
+    save();
+  });
+  customAgency.addEventListener('input', save);
+  detailInp.addEventListener('input', save);
+
+  wrap.appendChild(agencySel);
+  wrap.appendChild(customAgency);
+  wrap.appendChild(detailInp);
+  return wrap;
+}
+
+function tabMVA() {
+  const wrap = document.createElement('div');
+
+  // Ensure cars array has 6 slots
+  while (F.cars.length < 6) F.cars.push({model:"",plate:"",color:""});
+
+  // Card container
+  const mvaCard = document.createElement('div');
+  mvaCard.className = 'card';
+  const mvaTitle = document.createElement('div');
+  mvaTitle.className = 'card-title';
+  mvaTitle.textContent = 'Vehicles Involved';
+  const mvaBody = document.createElement('div');
+  mvaBody.className = 'card-body';
+  mvaCard.appendChild(mvaTitle);
+  mvaCard.appendChild(mvaBody);
+
+  function vehicleComplete(i) {
+    // A vehicle slot is "started" if any field has a value
+    const c = F.cars[i];
+    return !!(c.model || c.plate || c.color);
+  }
+
+  function renderVehicles() {
+    mvaBody.innerHTML = '';
+
+    for (let i = 0; i < 6; i++) {
+      // Show slot if: it's the first, OR the previous slot has been started
+      const show = i === 0 || vehicleComplete(i - 1);
+      if (!show) break;
+
+      // Divider between entries
+      if (i > 0) {
+        const div = document.createElement('div');
+        div.style.cssText = 'border-top:1px solid #f0e8d8;margin:14px 0 14px';
+        mvaBody.appendChild(div);
+      }
+
+      const rowTitle = document.createElement('div');
+      rowTitle.style.cssText = 'font-size:11px;font-weight:700;color:#8b0000;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px';
+      rowTitle.textContent = `Vehicle ${i + 1}`;
+      mvaBody.appendChild(rowTitle);
+
+      // Vehicle selector
+      const modelLbl = document.createElement('div');
+      modelLbl.className = 'lbl';
+      modelLbl.textContent = 'Year / Make / Model';
+      modelLbl.style.marginBottom = '4px';
+      mvaBody.appendChild(modelLbl);
+
+      const vs = vehicleSelector(F.cars[i].model, v => {
+        F.cars[i].model = v;
+        saveForm();
+        renderVehicles();
+      });
+      mvaBody.appendChild(vs);
+
+      mvaBody.appendChild((() => { const d = document.createElement('div'); d.style.height = '8px'; return d; })());
+
+      // Plate and Color
+      const plateCol = flexCol(1,
+        lbl('Plate #'),
+        (() => {
+          const el = inp(F.cars[i].plate, v => { F.cars[i].plate = v; saveForm(); renderVehicles(); });
+          return el;
+        })()
+      );
+
+      const colorCol = document.createElement('div');
+      colorCol.style.flex = '1';
+      const colorLbl = document.createElement('div');
+      colorLbl.className = 'lbl';
+      colorLbl.style.marginBottom = '4px';
+      colorLbl.textContent = 'Color';
+      colorCol.appendChild(colorLbl);
+      colorCol.appendChild(colorSelector(F.cars[i].color, v => {
+        F.cars[i].color = v;
+        saveForm();
+        renderVehicles();
+      }));
+
+      mvaBody.appendChild(flexRow(plateCol, colorCol));
+    }
+
+    const hint = document.createElement('div');
+    hint.style.cssText = 'font-size:11px;color:#aaa;margin-top:10px';
+    const shown = F.cars.filter((_,i) => i===0 || vehicleComplete(i-1)).length;
+    if (shown < 6) hint.textContent = `Vehicle ${shown + 1} will appear after Vehicle ${shown} is filled in.`;
+    mvaBody.appendChild(hint);
+  }
+
+  renderVehicles();
+  wrap.appendChild(mvaCard);
+  return wrap;
+}
+
+function tabLaw() {
+  const wrap = document.createElement('div');
+  const lawCard = document.createElement('div');
+  lawCard.className = 'card';
+  const lawTitle = document.createElement('div');
+  lawTitle.className = 'card-title';
+  lawTitle.textContent = 'Law Enforcement';
+  const lawBody = document.createElement('div');
+  lawBody.className = 'card-body';
+  lawCard.appendChild(lawTitle);
+  lawCard.appendChild(lawBody);
+
+  function renderLaw() {
+    lawBody.innerHTML = '';
+    const showRows = [
+      true,
+      !!(F.law[0] && F.law[0].trim()),
+      !!(F.law[1] && F.law[1].trim()),
+    ];
+    for (let i = 0; i < 3; i++) {
+      if (showRows[i]) lawBody.appendChild(lawRow(i, renderLaw));
+    }
+    const hint = document.createElement('div');
+    hint.style.cssText = 'font-size:11px;color:#aaa;margin-top:4px';
+    hint.textContent = 'Additional officer fields appear after each entry.';
+    lawBody.appendChild(hint);
+  }
+  renderLaw();
+
+  wrap.appendChild(lawCard);
+  return wrap;
+}
+
 
 function tabRemarks() {
   const wrap = document.createElement('div');
+
+  // ── Remarks ──────────────────────────────────────────────
   const ta = document.createElement('textarea');
   ta.className = 'ta';
   ta.rows = 5;
@@ -877,14 +1384,72 @@ function tabRemarks() {
   ta.value = F.remarks;
   ta.addEventListener('input', e => { F.remarks = e.target.value; saveForm(); });
   wrap.appendChild(card('Remarks', lbl('Cause of Incident, Damage, Insurance Carrier, etc.'), ta));
-  wrap.appendChild(card('Mutual Aid', field('', inp(F.mutual, v=>{F.mutual=v;saveForm();}, {placeholder:'Given or received from…'}))));
-  wrap.appendChild(card('Report Signature',
-    flexRow(
-      flexCol(2, lbl('Report By'), inp(F.reportBy, v=>{F.reportBy=v;saveForm();})),
-      flexCol(1, lbl('Page'), inp(F.pg, v=>{F.pg=v;saveForm();})),
-      flexCol(1, lbl('Of'),   inp(F.pgOf, v=>{F.pgOf=v;saveForm();}))
-    )
+
+  // ── Personnel Injured ────────────────────────────────────
+  const injCard = document.createElement('div');
+  injCard.className = 'card';
+  const injTitle = document.createElement('div');
+  injTitle.className = 'card-title';
+  injTitle.textContent = 'Personnel Injured';
+  const injBody = document.createElement('div');
+  injBody.className = 'card-body';
+
+  // Name — pull down from personnel database
+  const injNameLbl = document.createElement('div');
+  injNameLbl.className = 'lbl';
+  injNameLbl.textContent = 'Name';
+  injNameLbl.style.marginBottom = '4px';
+  injBody.appendChild(injNameLbl);
+
+  const injOpts = [["","— Select (if applicable) —"], ...PERSONNEL.map(p=>[p.badge, p.name])];
+  const injSel = sel(F.injName, injOpts, v => { F.injName = v; saveForm(); });
+  injSel.style.marginBottom = '12px';
+  injBody.appendChild(injSel);
+
+  // Badge number (auto-filled from selection, read-only display)
+  const injBadgeWrap = document.createElement('div');
+  injBadgeWrap.style.marginBottom = '12px';
+  const injBadgeLbl = document.createElement('div');
+  injBadgeLbl.className = 'lbl';
+  injBadgeLbl.textContent = 'Badge Number';
+  injBadgeLbl.style.marginBottom = '4px';
+  const injBadgeVal = document.createElement('div');
+  injBadgeVal.style.cssText = 'padding:9px 10px;background:#f0e8d8;border:1.5px solid #c8a97a;border-radius:6px;font-size:15px;color:#555;min-height:40px';
+  const resolvedBadge = F.injName ? (PERSONNEL.find(p=>p.badge===F.injName)||{badge:'—'}).badge : '—';
+  injBadgeVal.textContent = resolvedBadge;
+  injBadgeWrap.appendChild(injBadgeLbl);
+  injBadgeWrap.appendChild(injBadgeVal);
+  injBody.appendChild(injBadgeWrap);
+
+  // Update badge display when name changes
+  injSel.addEventListener('change', () => {
+    const found = PERSONNEL.find(p => p.badge === F.injName);
+    injBadgeVal.textContent = found ? found.badge : '—';
+  });
+
+  // Report Filed
+  const rptLbl = document.createElement('div');
+  rptLbl.className = 'lbl';
+  rptLbl.textContent = 'Report Filed';
+  rptLbl.style.marginBottom = '4px';
+  injBody.appendChild(rptLbl);
+  const rptSel = sel(F.rptFiled, [["","—"],["YES","YES"],["NO","NO"]], v=>{F.rptFiled=v;saveForm();});
+  injBody.appendChild(rptSel);
+
+  injCard.appendChild(injTitle);
+  injCard.appendChild(injBody);
+  wrap.appendChild(injCard);
+
+  // ── Mutual Aid ───────────────────────────────────────────
+  wrap.appendChild(card('Mutual Aid',
+    field('', inp(F.mutual, v=>{F.mutual=v;saveForm();}, {placeholder:'Given or received from…'}))
   ));
+
+  // ── Report Signature ─────────────────────────────────────
+  wrap.appendChild(card('Report Signature',
+    field('Report By', inp(F.reportBy, v=>{F.reportBy=v;saveForm();}))
+  ));
+
   return wrap;
 }
 
@@ -899,7 +1464,7 @@ function tabPreview() {
   summary.innerHTML = `
     <div class="ps-title">AURELIUS FIRE AND RESCUE — Summary</div>
     <div><b>Run #:</b> ${F.runNum||'—'} &nbsp; <b>Date:</b> ${F.date||'—'}</div>
-    <div><b>IC:</b> ${F.ic||'—'} &nbsp; <b>Entered by:</b> ${F.enteredBy||'—'} #${F.badge||'—'}</div>
+    <div><b>IC:</b> ${(PERSONNEL.find(p=>p.badge===F.ic)||{name:F.ic||'—'}).name} &nbsp; <b>Entered by:</b> ${(PERSONNEL.find(p=>p.badge===F.enteredBy)||{name:F.enteredBy||'—'}).name}</div>
     <div><b>Disp→Arr→Clear:</b> ${F.disp||'—'} → ${F.arrived||'—'} → ${F.clear||'—'}</div>
     <div><b>Type:</b> ${dispEntry?dispEntry.label:'—'}${F.dispDetail?' – '+F.dispDetail:''}</div>
     <div><b>Location:</b> ${locEntry?locEntry.code+' '+locEntry.label:'—'}</div>
@@ -913,9 +1478,18 @@ function tabPreview() {
 
   const btn = document.createElement('button');
   btn.className = 'btn-print';
-  btn.textContent = '📄 Generate PDF';
+  btn.textContent = '📄 Generate Completed PDF';
   btn.addEventListener('click', generatePDF);
   wrap.appendChild(btn);
+
+  const btn2 = document.createElement('button');
+  btn2.className = 'btn-print';
+  btn2.textContent = '🖨 Download Blank Form (Print & Fill by Hand)';
+  btn2.style.background = '#1a4a8a';
+  btn2.style.marginTop = '0';
+  btn2.addEventListener('click', generateBlankPDF);
+  wrap.appendChild(btn2);
+
   return wrap;
 }
 
@@ -937,7 +1511,500 @@ function timeDiffStr(t1, t2) {
   return d > 0 ? `+${d} min` : '';
 }
 
+// ── Shared print styles ──────────────────────────────────
+const PRINT_STYLES = `
+  @import url('https://fonts.googleapis.com/css2?family=Open+Sans:wght@400;600;700&display=swap');
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Open Sans', Arial, sans-serif; font-size: 9pt; color: #1a1a1a; background: white; }
+  @page { size: letter portrait; margin: 0; }
+
+  .page {
+    width: 8.5in; min-height: 11in;
+    padding: 0.4in 0.45in 0.35in;
+    background: white;
+    position: relative;
+    page-break-after: always;
+  }
+  .page:last-child { page-break-after: avoid; }
+
+  /* ── Header bar ── */
+  .page-header {
+    background: #8b0000;
+    color: white;
+    padding: 10px 16px;
+    border-radius: 6px 6px 0 0;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 12px;
+  }
+  .page-header .dept { font-size: 16pt; font-weight: 700; letter-spacing: 0.03em; }
+  .page-header .sub  { font-size: 8pt; opacity: 0.8; margin-top: 1px; }
+  .page-header .run-badge {
+    background: rgba(255,255,255,0.18);
+    border: 1px solid rgba(255,255,255,0.4);
+    border-radius: 6px;
+    padding: 6px 12px;
+    text-align: right;
+    font-size: 8pt;
+  }
+  .page-header .run-badge .rn { font-size: 13pt; font-weight: 700; display: block; }
+
+  /* ── Section label ── */
+  .sec {
+    font-size: 6.5pt; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 0.1em; color: #8b0000;
+    border-bottom: 1.5px solid #8b0000;
+    padding-bottom: 2px; margin-bottom: 6px; margin-top: 10px;
+  }
+  .sec:first-of-type { margin-top: 0; }
+
+  /* ── Info grid ── */
+  .info-grid { display: flex; flex-wrap: wrap; gap: 0; margin-bottom: 10px; border: 1px solid #ddd; border-radius: 4px; overflow: hidden; }
+  .info-cell { flex: 1; min-width: 120px; padding: 5px 10px; border-right: 1px solid #ddd; }
+  .info-cell:last-child { border-right: none; }
+  .info-cell .ilbl { font-size: 6.5pt; font-weight: 700; color: #8b0000; text-transform: uppercase; letter-spacing: .05em; display: block; margin-bottom: 2px; }
+  .info-cell .ival { font-size: 9.5pt; font-weight: 600; }
+
+  /* ── Time row ── */
+  .time-row { display: flex; gap: 0; border: 1px solid #ddd; border-radius: 4px; overflow: hidden; margin-bottom: 10px; }
+  .time-cell { flex: 1; padding: 5px 8px; border-right: 1px solid #ddd; text-align: center; }
+  .time-cell:last-child { border-right: none; }
+  .time-cell .tlbl { font-size: 6pt; font-weight: 700; color: #8b0000; text-transform: uppercase; letter-spacing: .05em; display: block; margin-bottom: 2px; }
+  .time-cell .tval { font-size: 11pt; font-weight: 700; display: block; }
+  .time-cell .tdif { font-size: 6.5pt; color: #2d6a2d; font-weight: 600; display: block; }
+
+  /* ── Two-column layout ── */
+  .two-col { display: flex; gap: 14px; margin-bottom: 10px; }
+  .two-col .col { flex: 1; }
+
+  /* ── Tag lists (apparatus, personnel) ── */
+  .tag-list { display: flex; flex-wrap: wrap; gap: 4px; }
+  .tag {
+    background: #f5ede0; border: 1px solid #d4a96a;
+    border-radius: 4px; padding: 2px 8px;
+    font-size: 8pt; font-weight: 600; color: #5a3000;
+  }
+  .tag.active { background: #8b0000; border-color: #8b0000; color: white; }
+
+  /* ── Data table ── */
+  .dtable { width: 100%; border-collapse: collapse; margin-bottom: 0; }
+  .dtable th { background: #f5ede0; font-size: 6.5pt; font-weight: 700; text-transform: uppercase; color: #8b0000; padding: 4px 8px; border: 1px solid #ddd; text-align: left; letter-spacing:.04em; }
+  .dtable td { font-size: 8.5pt; padding: 5px 8px; border: 1px solid #ddd; vertical-align: top; }
+  .dtable tr:nth-child(even) td { background: #fafafa; }
+
+  /* ── Remarks box ── */
+  .remarks-box { border: 1px solid #ddd; border-radius: 4px; padding: 8px 10px; min-height: 52px; font-size: 8.5pt; line-height: 1.5; white-space: pre-wrap; background: #fafafa; }
+
+  /* ── Footer ── */
+  .page-footer { position: absolute; bottom: 0.25in; left: 0.45in; right: 0.45in; border-top: 1px solid #ddd; padding-top: 6px; display: flex; justify-content: space-between; font-size: 7pt; color: #888; }
+
+  /* ── Blank form styles ── */
+  .blank-line { border-bottom: 1px solid #aaa; display: inline-block; height: 14px; }
+  .blank-box  { border: 1px solid #aaa; border-radius: 3px; display: inline-flex; align-items: center; justify-content: center; width: 10px; height: 10px; margin-right: 3px; }
+  .blank-cell { border: 1px solid #ccc; padding: 4px 8px; }
+  .blank-grid { display: flex; flex-wrap: wrap; border: 1px solid #ccc; border-radius: 4px; overflow: hidden; margin-bottom: 10px; }
+  .blank-grid-item { flex: 0 0 33.33%; padding: 4px 8px; border-right: 1px solid #ddd; border-bottom: 1px solid #ddd; font-size: 7.5pt; display: flex; align-items: center; gap: 5px; }
+  .blank-time { flex: 1; border: 1px solid #ccc; border-radius: 4px; padding: 5px 8px; text-align: center; margin-right: 4px; }
+`;
+
 function buildPrintHTML() {
+  const selPers = PERSONNEL.filter(p => F.personnel[p.badge]);
+  const autoEmt   = selPers.filter(p => p.qual && p.qual.includes('emt')).length;
+  const autoInt   = selPers.filter(p => p.qual && p.qual.includes('int')).length;
+  const dispEntry = [...DISPATCH_TYPES, ...DISPATCH_SPECIAL].find(d => d.code === F.dispType);
+  const locEntry  = LOCATIONS.find(l => l.code === F.locCode);
+  const icName    = (PERSONNEL.find(p => p.badge === F.ic) || {name: F.ic || ''}).name;
+  const filledCars = F.cars.filter(c => c.model || c.plate || c.color);
+  const usedAmbs   = F.amb.filter(a => a.svc);
+  const usedLaw    = F.law.filter(l => l && l.trim()).map(l => {
+    const parts = l.split('||');
+    return parts[0] + (parts[1] ? ' — ' + parts[1] : '');
+  });
+  const usedRefused = (F.refusedPcr || []).filter(p => p.trim());
+  const activeApp  = APPARATUS.filter(a => F.apparatus[a]);
+
+  const dispText = dispEntry
+    ? dispEntry.label + (F.dispDetail ? ' ' + F.dispDetail : '')
+    : '—';
+
+  return `
+  <!DOCTYPE html><html><head><meta charset="utf-8">
+  <style>${PRINT_STYLES}</style></head><body>
+
+  <!-- ═══════════ PAGE 1 ═══════════ -->
+  <div class="page">
+    <div class="page-header">
+      <div>
+        <div class="dept">AURELIUS FIRE AND RESCUE</div>
+        <div class="sub">Incident Run Report</div>
+      </div>
+      <div class="run-badge">
+        <span class="rn">${F.runNum || '—'}</span>
+        <span>${F.date || '—'}</span>
+      </div>
+    </div>
+
+    <!-- Incident Info -->
+    <div class="sec">Incident Information</div>
+    <div class="info-grid">
+      <div class="info-cell" style="flex:1.5">
+        <span class="ilbl">Incident Commander</span>
+        <span class="ival">${icName || '—'}</span>
+      </div>
+      <div class="info-cell">
+        <span class="ilbl">Location Type</span>
+        <span class="ival">${locEntry ? locEntry.label : '—'}</span>
+      </div>
+      <div class="info-cell" style="flex:2">
+        <span class="ilbl">Address</span>
+        <span class="ival">${F.address || '—'}</span>
+      </div>
+    </div>
+
+    <!-- Dispatch -->
+    <div class="sec">Dispatch</div>
+    <div class="info-grid" style="margin-bottom:4px">
+      <div class="info-cell" style="flex:1.2">
+        <span class="ilbl">Type</span>
+        <span class="ival">${dispText}</span>
+      </div>
+      <div class="info-cell" style="flex:3">
+        <span class="ilbl">Actual Dispatch</span>
+        <span class="ival">${F.dispActual || '—'}</span>
+      </div>
+    </div>
+
+    <!-- Times -->
+    <div class="sec">Response Times</div>
+    <div class="time-row">
+      <div class="time-cell"><span class="tlbl">Dispatched</span><span class="tval">${F.disp||'—'}</span><span class="tdif">&nbsp;</span></div>
+      <div class="time-cell"><span class="tlbl">Enroute</span><span class="tval">${F.enroute||'—'}</span><span class="tdif">${timeDiffStr(F.disp,F.enroute)||'&nbsp;'}</span></div>
+      <div class="time-cell"><span class="tlbl">Arrived</span><span class="tval">${F.arrived||'—'}</span><span class="tdif">${timeDiffStr(F.enroute,F.arrived)||'&nbsp;'}</span></div>
+      <div class="time-cell"><span class="tlbl">Cleared</span><span class="tval">${F.clear||'—'}</span><span class="tdif">${timeDiffStr(F.arrived,F.clear)||'&nbsp;'}</span></div>
+      <div class="time-cell"><span class="tlbl">In Quarters</span><span class="tval">${F.inQ||'—'}</span><span class="tdif">${timeDiffStr(F.clear,F.inQ)||'&nbsp;'}</span></div>
+    </div>
+
+    <!-- Two-column: Apparatus + Personnel -->
+    <div class="two-col">
+      <div class="col">
+        <div class="sec">Apparatus Responding</div>
+        <div class="tag-list">
+          ${activeApp.length ? activeApp.map(a => {
+            const driver = (F.apparatusDriver||{})[a];
+            const dName = driver ? (PERSONNEL.find(p=>p.badge===driver)||{name:''}).name : '';
+            return `<div class="tag active">${a}${dName?' · '+dName.split(',')[0]:''}</div>`;
+          }).join('') : '<span style="color:#aaa;font-size:8pt">None</span>'}
+        </div>
+      </div>
+      <div class="col">
+        <div class="sec">Personnel on Scene (${selPers.length})</div>
+        <div style="display:flex;flex-wrap:wrap;gap:3px">
+          ${selPers.length ? selPers.map(p =>
+            `<div class="tag">${p.name}${p.qual?' <span style="opacity:.7;font-size:7pt">${p.qual}</span>':''}</div>`
+          ).join('') : '<span style="color:#aaa;font-size:8pt">None selected</span>'}
+        </div>
+        <div style="margin-top:6px;font-size:7.5pt;color:#555">
+          EMTs: <b>${F.emtCt||autoEmt}</b> &nbsp; Interior FF: <b>${F.intCt||autoInt}</b> &nbsp; Total: <b>${F.totalCt||selPers.length}</b>
+        </div>
+      </div>
+    </div>
+
+    ${filledCars.length ? `
+    <!-- Vehicles -->
+    <div class="sec">Vehicles Involved</div>
+    <table class="dtable" style="margin-bottom:10px">
+      <thead><tr><th>#</th><th>Year / Make / Model</th><th>Plate</th><th>Color</th></tr></thead>
+      <tbody>
+        ${filledCars.map((c,i)=>`<tr><td style="width:24px;text-align:center;font-weight:700">${i+1}</td><td>${c.model||'—'}</td><td>${c.plate||'—'}</td><td>${c.color||'—'}</td></tr>`).join('')}
+      </tbody>
+    </table>` : ''}
+
+    ${usedLaw.length ? `
+    <!-- Law Enforcement -->
+    <div class="sec">Law Enforcement</div>
+    <div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:10px">
+      ${usedLaw.map(l=>`<div class="tag">${l}</div>`).join('')}
+    </div>` : ''}
+
+    ${usedAmbs.length ? `
+    <!-- EMS -->
+    <div class="sec">EMS / Ambulances</div>
+    <table class="dtable" style="margin-bottom:10px">
+      <thead><tr><th>#</th><th>Service</th><th>PCR #</th></tr></thead>
+      <tbody>
+        ${usedAmbs.map((a,i)=>`<tr><td style="width:24px;text-align:center;font-weight:700">${i+1}</td><td>${ambName(a)||'—'}</td><td>${a.pcr||'—'}</td></tr>`).join('')}
+      </tbody>
+    </table>` : ''}
+
+    ${usedRefused.length ? `
+    <div style="font-size:8pt;margin-bottom:10px">
+      <b style="color:#8b0000">Refused Transport PCR:</b>
+      ${usedRefused.join(' &nbsp;|&nbsp; ')}
+    </div>` : ''}
+
+    ${F.mutual ? `
+    <div style="font-size:8pt;margin-bottom:10px">
+      <b style="color:#8b0000">Mutual Aid:</b> ${F.mutual}
+    </div>` : ''}
+
+    <!-- Remarks -->
+    <div class="sec">Remarks</div>
+    <div class="remarks-box">${F.remarks || '&nbsp;'}</div>
+
+    ${F.injName ? `
+    <div style="font-size:8pt;margin-top:8px;padding:6px 10px;background:#fff3f3;border:1px solid #e0b0b0;border-radius:4px">
+      <b style="color:#8b0000">Personnel Injured:</b>
+      ${(PERSONNEL.find(p=>p.badge===F.injName)||{name:F.injName}).name}
+      &nbsp; Badge: ${F.injName}
+      &nbsp; Report Filed: ${F.rptFiled||'—'}
+    </div>` : ''}
+
+    <div class="page-footer">
+      <span>Aurelius Fire &amp; Rescue — Run Report ${F.runNum||''}</span>
+      <span>IC: ${icName||'—'}</span>
+      <span>Report by: ${F.reportBy||'___________________________'}</span>
+    </div>
+  </div>
+
+  </body></html>`;
+}
+
+function buildBlankFormHTML() {
+  const ROSTER_COLS = 2;
+  const half = Math.ceil(PERSONNEL.length / ROSTER_COLS);
+  let persRows = '';
+  for (let r = 0; r < half; r++) {
+    persRows += '<tr>';
+    for (let c = 0; c < ROSTER_COLS; c++) {
+      const p = PERSONNEL[r + c * half];
+      if (p) {
+        persRows += `<td style="padding:3px 8px;border:1px solid #ddd;font-size:8pt">
+          <span style="display:inline-block;width:10px;height:10px;border:1px solid #aaa;border-radius:2px;margin-right:5px;vertical-align:middle"></span>
+          ${p.name} <span style="color:#888;font-size:7pt">${p.badge}${p.qual?' '+p.qual:''}</span>
+        </td>`;
+      } else {
+        persRows += '<td style="border:1px solid #ddd"></td>';
+      }
+    }
+    persRows += '</tr>';
+  }
+
+  const dispItems = [...DISPATCH_TYPES, ...DISPATCH_SPECIAL];
+  const dispHalf = Math.ceil(dispItems.length / 2);
+  let dispRows = '';
+  for (let r = 0; r < dispHalf; r++) {
+    const d1 = dispItems[r], d2 = dispItems[r + dispHalf];
+    dispRows += `<tr>
+      <td style="padding:3px 8px;border:1px solid #ddd;font-size:8pt;width:50%">
+        <span style="display:inline-block;width:9px;height:9px;border:1px solid #aaa;margin-right:5px;vertical-align:middle"></span>
+        ${d1.code} ${d1.label}
+      </td>
+      <td style="padding:3px 8px;border:1px solid #ddd;font-size:8pt;width:50%">
+        ${d2 ? `<span style="display:inline-block;width:9px;height:9px;border:1px solid #aaa;margin-right:5px;vertical-align:middle"></span>${d2.code} ${d2.label}` : ''}
+      </td>
+    </tr>`;
+  }
+
+  const locHalf = Math.ceil(LOCATIONS.length / 2);
+  let locRows = '';
+  for (let r = 0; r < locHalf; r++) {
+    const l1 = LOCATIONS[r], l2 = LOCATIONS[r + locHalf];
+    locRows += `<tr>
+      <td style="padding:3px 8px;border:1px solid #ddd;font-size:8pt;width:50%">
+        <span style="display:inline-block;width:9px;height:9px;border:1px solid #aaa;margin-right:5px;vertical-align:middle"></span>
+        ${l1.code} ${l1.label}
+      </td>
+      <td style="padding:3px 8px;border:1px solid #ddd;font-size:8pt;width:50%">
+        ${l2 ? `<span style="display:inline-block;width:9px;height:9px;border:1px solid #aaa;margin-right:5px;vertical-align:middle"></span>${l2.code} ${l2.label}` : ''}
+      </td>
+    </tr>`;
+  }
+
+  return `<!DOCTYPE html><html><head><meta charset="utf-8">
+  <style>${PRINT_STYLES}
+    .field-line { border-bottom:1px solid #aaa; display:block; min-height:18px; margin-top:2px; }
+    .fl { font-size:6.5pt; font-weight:700; color:#8b0000; text-transform:uppercase; letter-spacing:.06em; margin-top:6px; display:block; }
+  </style></head><body>
+
+  <!-- PAGE 1 — Incident details -->
+  <div class="page">
+    <div class="page-header">
+      <div>
+        <div class="dept">AURELIUS FIRE AND RESCUE</div>
+        <div class="sub">Incident Run Report</div>
+      </div>
+      <div class="run-badge">
+        <span class="rn">Run #: __________</span>
+        <span>Date: ___________</span>
+      </div>
+    </div>
+
+    <div class="sec">Incident Information</div>
+    <div style="display:flex;gap:16px;margin-bottom:10px">
+      <div style="flex:1"><span class="fl">Incident Commander</span><span class="field-line"></span></div>
+      <div style="flex:1"><span class="fl">Location Type</span><span class="field-line"></span></div>
+      <div style="flex:2"><span class="fl">Address</span><span class="field-line"></span></div>
+    </div>
+
+    <div class="sec">Dispatch</div>
+    <div style="display:flex;gap:16px;margin-bottom:6px">
+      <div style="flex:1"><span class="fl">Dispatch Type</span>
+        <table style="width:100%;border-collapse:collapse;margin-top:4px">${dispRows}</table>
+      </div>
+    </div>
+    <span class="fl">Actual Dispatch Text</span>
+    <span class="field-line" style="margin-bottom:10px"></span>
+
+    <div class="sec">Response Times</div>
+    <div style="display:flex;gap:6px;margin-bottom:10px">
+      ${['Dispatched','Enroute','Arrived','Cleared','In Quarters'].map(t=>
+        `<div style="flex:1;text-align:center;border:1px solid #ddd;border-radius:4px;padding:5px 4px">
+          <div style="font-size:6.5pt;font-weight:700;color:#8b0000;text-transform:uppercase">${t}</div>
+          <div style="border-bottom:1px solid #aaa;min-height:20px;margin-top:4px"></div>
+        </div>`
+      ).join('')}
+    </div>
+
+    <div class="sec">Apparatus Responding — check all that apply, write driver name</div>
+    <table style="width:100%;border-collapse:collapse;margin-bottom:10px">
+      <tbody>
+        <tr>
+          ${APPARATUS.slice(0,5).map(a=>`<td style="border:1px solid #ddd;padding:4px 6px;font-size:8pt;width:20%">
+            <span style="display:inline-block;width:9px;height:9px;border:1px solid #aaa;margin-right:4px;vertical-align:middle"></span>${a}
+            <div style="border-bottom:1px solid #ddd;margin-top:6px;font-size:7pt;color:#aaa">driver</div>
+          </td>`).join('')}
+        </tr>
+        <tr>
+          ${APPARATUS.slice(5).map(a=>`<td style="border:1px solid #ddd;padding:4px 6px;font-size:8pt;width:20%">
+            <span style="display:inline-block;width:9px;height:9px;border:1px solid #aaa;margin-right:4px;vertical-align:middle"></span>${a}
+            <div style="border-bottom:1px solid #ddd;margin-top:6px;font-size:7pt;color:#aaa">driver</div>
+          </td>`).join('')}
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="sec">Location Type — check one</div>
+    <table style="width:100%;border-collapse:collapse;margin-bottom:10px">${locRows}</table>
+
+    <div class="sec">Vehicles Involved</div>
+    <table class="dtable" style="margin-bottom:10px">
+      <thead><tr><th>#</th><th>Year / Make / Model</th><th>Plate #</th><th>Color</th></tr></thead>
+      <tbody>
+        ${[1,2,3].map(n=>`<tr><td style="width:24px;text-align:center;font-weight:700">${n}</td><td>&nbsp;</td><td>&nbsp;</td><td>&nbsp;</td></tr>`).join('')}
+      </tbody>
+    </table>
+
+    <div class="sec">Law Enforcement</div>
+    <div style="display:flex;gap:10px;margin-bottom:10px">
+      ${[1,2,3].map(_=>`<div style="flex:1"><span class="field-line"></span></div>`).join('')}
+    </div>
+
+    <div class="sec">EMS / Ambulances</div>
+    <table class="dtable" style="margin-bottom:6px">
+      <thead><tr><th>#</th><th>Service</th><th>PCR #</th></tr></thead>
+      <tbody>
+        ${[1,2,3].map(n=>`<tr><td style="width:24px;text-align:center;font-weight:700">${n}</td><td>&nbsp;</td><td>&nbsp;</td></tr>`).join('')}
+      </tbody>
+    </table>
+    <div style="font-size:8pt;margin-bottom:10px">
+      <b style="color:#8b0000">Refused Transport PCR:</b>
+      <span style="display:inline-block;border-bottom:1px solid #aaa;width:200px;margin-left:6px"></span>
+    </div>
+
+    <div style="font-size:8pt;margin-bottom:10px">
+      <b style="color:#8b0000">Mutual Aid Given / Received:</b>
+      <span style="display:inline-block;border-bottom:1px solid #aaa;width:250px;margin-left:6px"></span>
+    </div>
+
+    <div class="sec">Remarks — Cause of incident, damage, insurance carrier</div>
+    <div style="border:1px solid #ddd;border-radius:4px;min-height:55px;background:#fafafa;margin-bottom:10px"></div>
+
+    <div style="display:flex;gap:16px;margin-bottom:0">
+      <div style="flex:2"><span class="fl">Personnel Injured (name)</span><span class="field-line"></span></div>
+      <div style="flex:1"><span class="fl">Badge #</span><span class="field-line"></span></div>
+      <div style="flex:1"><span class="fl">Report Filed</span>
+        <div style="margin-top:4px;font-size:8.5pt">
+          <span style="display:inline-block;width:9px;height:9px;border:1px solid #aaa;margin-right:4px;vertical-align:middle"></span>YES &nbsp;
+          <span style="display:inline-block;width:9px;height:9px;border:1px solid #aaa;margin-right:4px;vertical-align:middle"></span>NO
+        </div>
+      </div>
+    </div>
+
+    <div class="page-footer">
+      <span>Aurelius Fire &amp; Rescue — Run Report</span>
+      <span>Report by: ___________________________</span>
+      <span>Page 1 of 2</span>
+    </div>
+  </div>
+
+  <!-- PAGE 2 — Personnel roster -->
+  <div class="page">
+    <div class="page-header">
+      <div>
+        <div class="dept">AURELIUS FIRE AND RESCUE</div>
+        <div class="sub">Personnel on Scene — Run Report</div>
+      </div>
+      <div class="run-badge">
+        <span class="rn">Run #: __________</span>
+        <span>Date: ___________</span>
+      </div>
+    </div>
+
+    <div class="sec">Personnel on Scene — check all responding members</div>
+    <div style="display:flex;gap:12px;margin-bottom:10px;font-size:8pt">
+      <span>EMTs: <span style="display:inline-block;border-bottom:1px solid #aaa;width:36px"></span></span>
+      <span>Interior FF: <span style="display:inline-block;border-bottom:1px solid #aaa;width:36px"></span></span>
+      <span>Total: <span style="display:inline-block;border-bottom:1px solid #aaa;width:36px"></span></span>
+    </div>
+    <table style="width:100%;border-collapse:collapse;margin-bottom:14px">${persRows}</table>
+
+    <div class="page-footer">
+      <span>Aurelius Fire &amp; Rescue — Run Report</span>
+      <span>Report by: ___________________________</span>
+      <span>Page 2 of 2</span>
+    </div>
+  </div>
+
+  </body></html>`;
+}
+
+function generatePDF() {
+  if (typeof html2pdf === 'undefined') {
+    alert('PDF library not loaded. Please check your internet connection.');
+    return;
+  }
+  const container = document.getElementById('print-form');
+  container.innerHTML = buildPrintHTML();
+  container.style.display = 'block';
+  const fn = `AureliusRunReport_${(F.runNum||'').replace(/[^a-z0-9]/gi,'_')}_${(F.date||'').replace(/-/g,'')}.pdf`;
+  html2pdf().set({
+    margin: 0,
+    filename: fn,
+    image: { type: 'jpeg', quality: 0.98 },
+    html2canvas: { scale: 2, useCORS: true, logging: false },
+    jsPDF: { unit: 'in', format: 'letter', orientation: 'portrait' },
+    pagebreak: { mode: ['css', 'legacy'] }
+  }).from(container).save().then(() => { container.style.display = 'none'; });
+}
+
+function generateBlankPDF() {
+  if (typeof html2pdf === 'undefined') {
+    alert('PDF library not loaded. Please check your internet connection.');
+    return;
+  }
+  const container = document.getElementById('print-form');
+  container.innerHTML = buildBlankFormHTML();
+  container.style.display = 'block';
+  html2pdf().set({
+    margin: 0,
+    filename: 'AureliusRunReport_BLANK.pdf',
+    image: { type: 'jpeg', quality: 0.98 },
+    html2canvas: { scale: 2, useCORS: true, logging: false },
+    jsPDF: { unit: 'in', format: 'letter', orientation: 'portrait' },
+    pagebreak: { mode: ['css', 'legacy'] }
+  }).from(container).save().then(() => { container.style.display = 'none'; });
+}
   const selPers = PERSONNEL.filter(p=>F.personnel[p.badge]);
 
   // Auto-tally EMT and interior counts from checked personnel qualifications
@@ -987,177 +2054,38 @@ function buildPrintHTML() {
     </div>`
   ).join('');
 
-  // MVA rows
-  let mvaRows = F.cars.map((c,i) =>
+  // Vehicle rows — only show filled ones, up to 6
+  const filledCars = (F.cars||[]).filter(c => c.model || c.plate || c.color);
+  let mvaRows = filledCars.length ? filledCars.map((c,i) =>
     `<tr>
-      <td style="width:10%;font-size:7.5pt"><b>CAR #${i+1}</b></td>
-      <td style="font-size:7.5pt"><b>MODEL:</b> ${c.model||'&nbsp;'.repeat(30)}</td>
-      <td style="font-size:7.5pt"><b>PLATE#:</b> ${c.plate||'&nbsp;'.repeat(15)}</td>
+      <td style="width:10%;font-size:7.5pt"><b>VEH #${i+1}</b></td>
+      <td style="font-size:7.5pt"><b>MODEL:</b> ${c.model||'&nbsp;'.repeat(28)}</td>
+      <td style="font-size:7.5pt"><b>PLATE#:</b> ${c.plate||'&nbsp;'.repeat(12)}</td>
       <td style="font-size:7.5pt"><b>COLOR:</b> ${c.color||'&nbsp;'.repeat(10)}</td>
     </tr>`
-  ).join('');
+  ).join('') : `<tr><td colspan="4" style="font-size:7.5pt;color:#aaa">No vehicles entered</td></tr>`;
 
-  // Ambulances
+  // Ambulances — each with their own PCR #
+  const usedAmbs = F.amb.filter(a => a.svc);
   let ambCells = F.amb.map((a,i) =>
-    `<td><b>${i+1}:</b> ${ambName(a)||'&nbsp;'.repeat(20)} &nbsp; <b>ALS:</b> ${a.als||'___'}</td>`
+    `<td><b>${i+1}:</b> ${ambName(a)||'&nbsp;'.repeat(18)} &nbsp; <b>PCR#:</b> ${a.pcr||'___________'}</td>`
   ).join('');
 
-  // Law
-  let lawCells = F.law.map((l,i) =>
-    `<td><b>${i+1}:</b> ${l||'&nbsp;'.repeat(30)}</td>`
-  ).join('');
+  // Refused Transport PCR
+  const usedRefused = (F.refusedPcr||[]).filter(p=>p.trim());
+  const refusedLine = usedRefused.length
+    ? usedRefused.map((p,i)=>`<b>Refused PCR #${i+1}:</b> ${p}`).join(' &nbsp;|&nbsp; ')
+    : '';
 
-  // Page 2 personnel
-  const half = Math.ceil(PERSONNEL.length/2);
-  let p2Rows = '';
-  for (let r=0; r<half; r++) {
-    const p1=PERSONNEL[r], p2=PERSONNEL[r+half];
-    p2Rows += `<tr>
-      <td style="width:50%;font-size:8pt">
-        ${chkHtml(!!F.personnel[p1.badge])}
-        <span style="font-weight:${F.personnel[p1.badge]?'bold':'normal'}">${p1.name}</span>
-        <span style="color:#555;font-size:7pt">&nbsp;${p1.badge}${p1.qual?' '+p1.qual:''}</span>
-      </td>
-      ${p2?`<td style="width:50%;font-size:8pt">
-        ${chkHtml(!!F.personnel[p2.badge])}
-        <span style="font-weight:${F.personnel[p2.badge]?'bold':'normal'}">${p2.name}</span>
-        <span style="color:#555;font-size:7pt">&nbsp;${p2.badge}${p2.qual?' '+p2.qual:''}</span>
-      </td>`:'<td></td>'}
-    </tr>`;
-  }
+  // Law — stored as "Agency||Detail", print as "Agency — Detail"
+  let lawCells = F.law.map((l,i) => {
+    if (!l) return `<td><b>${i+1}:</b> ${'&nbsp;'.repeat(30)}</td>`;
+    const parts = l.split('||');
+    const display = parts[0] + (parts[1] ? ' — ' + parts[1] : '');
+    return `<td><b>${i+1}:</b> ${display}</td>`;
+  }).join('');
 
-  return `
-  <div class="rpt">
-    <div class="rpt-title">AURELIUS FIRE AND RESCUE</div>
 
-    <!-- Date / Run# / IC -->
-    <table><tbody><tr>
-      <td style="width:25%"><span class="bl">DATE:</span> ${F.date}</td>
-      <td style="width:25%"><span class="bl">RUN REPORT #</span> ${F.runNum}</td>
-      <td><span class="bl">INCIDENT COMMANDER:</span> ${F.ic}</td>
-    </tr></tbody></table>
-
-    <!-- Entered by -->
-    <table><tbody><tr>
-      <td style="width:35%"><span class="bl">Entered by:</span> ${F.enteredBy}</td>
-      <td style="width:20%"><span class="bl">Badge #:</span> ${F.badge}</td>
-      <td><span class="bl">On:</span> ${F.entryDate} <span style="font-size:6.5pt;font-style:italic">Computer entry only</span></td>
-    </tr></tbody></table>
-
-    <!-- Dispatch Actual -->
-    ${F.dispActual ? `<table><tbody><tr><td><span class="bl">DISPATCH:</span> ${F.dispActual}</td></tr></tbody></table>` : ''}
-
-    <!-- Times -->
-    <table><tbody><tr>
-      <td style="width:20%;text-align:center"><div class="bl" style="font-size:7pt">DISPATCHED</div><div style="font-size:11pt;font-weight:bold;border-top:1px solid #000;padding-top:1px">${F.disp}</div></td>
-      <td style="width:20%;text-align:center"><div class="bl" style="font-size:7pt">ENROUTE</div><div style="font-size:11pt;font-weight:bold;border-top:1px solid #000;padding-top:1px">${F.enroute}</div><div style="font-size:6.5pt;color:#555">${timeDiffStr(F.disp,F.enroute)}</div></td>
-      <td style="width:20%;text-align:center"><div class="bl" style="font-size:7pt">ARRIVED</div><div style="font-size:11pt;font-weight:bold;border-top:1px solid #000;padding-top:1px">${F.arrived}</div><div style="font-size:6.5pt;color:#555">${timeDiffStr(F.enroute,F.arrived)}</div></td>
-      <td style="width:20%;text-align:center"><div class="bl" style="font-size:7pt">CLEAR SCENE</div><div style="font-size:11pt;font-weight:bold;border-top:1px solid #000;padding-top:1px">${F.clear}</div><div style="font-size:6.5pt;color:#555">${timeDiffStr(F.arrived,F.clear)}</div></td>
-      <td style="width:20%;text-align:center"><div class="bl" style="font-size:7pt">IN QUARTERS</div><div style="font-size:11pt;font-weight:bold;border-top:1px solid #000;padding-top:1px">${F.inQ}</div><div style="font-size:6.5pt;color:#555">${timeDiffStr(F.clear,F.inQ)}</div></td>
-    </tr></tbody></table>
-
-    <!-- Apparatus -->
-    <div class="sec-hdr">APPARATUS RESPONDING — Riders</div>
-    <table><tbody>${appRows}</tbody></table>
-
-    <!-- Dispatch -->
-    <div class="sec-hdr">DISPATCHED AS</div>
-    <div class="disp-wrap">${dispHtml}</div>
-
-    <!-- Location -->
-    <div class="sec-hdr">LOCATION TYPE</div>
-    <div class="loc-wrap">${locHtml}</div>
-    <table><tbody><tr><td><span class="bl">ADDRESS:</span> ${F.address}</td></tr></tbody></table>
-
-    <!-- Counts -->
-    <table><tbody><tr>
-      <td style="width:25%"><span class="bl">EMT's:</span> ${displayEmt}</td>
-      <td style="width:25%"><span class="bl">Interior Firefighters:</span> ${displayInt}</td>
-      <td style="width:30%"><span class="bl">Total Personnel on Call:</span> ${displayTotal}</td>
-      <td><span class="bl">Page:</span> ${F.pg} of ${F.pgOf}</td>
-    </tr></tbody></table>
-
-    <!-- Injured -->
-    <table><tbody><tr>
-      <td style="width:38%"><span class="bl">PERSONNEL INJURED — Name:</span> ${F.injName}</td>
-      <td style="width:18%"><span class="bl">Number:</span> ${F.injNum}</td>
-      <td><span class="bl">Report Filed:</span> YES___ NO___${F.rptFiled?' <b>'+F.rptFiled+'</b>':''}</td>
-    </tr></tbody></table>
-
-    <!-- Remarks -->
-    <div class="sec-hdr">REMARKS — CAUSE OF INCIDENT, EXTENT OF DAMAGE, INSURANCE CARRIER</div>
-    <div class="remarks-box">${F.remarks||''}</div>
-
-    <!-- MVA -->
-    <div class="sec-hdr">MVA</div>
-    <table><tbody>${mvaRows}</tbody></table>
-
-    <!-- Mutual Aid -->
-    <table style="margin-top:4px"><tbody><tr>
-      <td><span class="bl">MUTUAL AID GIVEN OR RECEIVED:</span> ${F.mutual}</td>
-    </tr></tbody></table>
-
-    <!-- Ambulance -->
-    <div class="sec-hdr">AMBULANCE USED</div>
-    <table><tbody><tr style="font-size:8pt">${ambCells}</tr></tbody></table>
-
-    <!-- PCR -->
-    <table><tbody><tr>
-      <td><span class="bl">PCR NUMBERS:</span> ${F.pcr}</td>
-    </tr></tbody></table>
-
-    <!-- Law -->
-    <div class="sec-hdr">LAW ENFORCEMENT</div>
-    <table><tbody><tr style="font-size:8pt">${lawCells}</tr></tbody></table>
-
-    <!-- Personnel -->
-    <div class="sec-hdr">PERSONNEL ON SCENE</div>
-    <div class="pers-wrap">${persHtml}</div>
-
-    <!-- Footer -->
-    <div class="footer-row">
-      <span><b>REPORT BY SIGN:</b> ${F.reportBy||'_________________________________'}</span>
-      <span><b>PAGE:</b> ${F.pg} OF ${F.pgOf}</span>
-    </div>
-  </div>
-
-  <!-- PAGE 2 -->
-  <div class="page2" style="page-break-before:always">
-    <div class="page2-title">Aurelius Fire and Rescue</div>
-    <table style="border-collapse:collapse;width:100%;margin-bottom:6pt">
-      <tbody>${p2Rows}</tbody>
-    </table>
-    <div style="border-top:1px solid #000;padding-top:6pt;font-size:8pt;font-family:Arial,sans-serif">
-      <b>Report by</b> ${F.reportBy||'_________________________________'}
-    </div>
-  </div>
-  `;
-}
-
-function generatePDF() {
-  const container = document.getElementById('print-form');
-  container.innerHTML = buildPrintHTML();
-  container.style.display = 'block';
-
-  const fn = `AureliusRunReport_${(F.runNum||'').replace(/[^a-z0-9]/gi,'_')}_${(F.date||'').replace(/-/g,'')}.pdf`;
-
-  if (typeof html2pdf === 'undefined') {
-    alert('PDF library not loaded. Please check your internet connection and try again.');
-    container.style.display = 'none';
-    return;
-  }
-
-  html2pdf().set({
-    margin: [0.3, 0.3, 0.3, 0.3],
-    filename: fn,
-    image: { type: 'jpeg', quality: 0.98 },
-    html2canvas: { scale: 2, useCORS: true },
-    jsPDF: { unit: 'in', format: 'letter', orientation: 'portrait' },
-    pagebreak: { mode: ['avoid-all', 'css', 'legacy'] }
-  }).from(container).save().then(() => {
-    container.style.display = 'none';
-  });
-}
 
 // ══════════════════════════════
 // RENDER
@@ -1182,7 +2110,7 @@ function renderTabBar() {
 function renderTab() {
   const tc = document.getElementById('tab-content');
   tc.innerHTML = '';
-  const builders = [tabIncident,tabTimes,tabDispatch,tabApparatus,tabPersonnel,tabMVA,tabEMS,tabRemarks,tabPreview];
+  const builders = [tabIncident,tabTimes,tabDispatch,tabApparatus,tabPersonnel,tabMVA,tabEMS,tabLaw,tabRemarks,tabPreview];
   tc.appendChild(builders[tab]());
 }
 
