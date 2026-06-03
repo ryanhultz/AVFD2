@@ -382,7 +382,7 @@ const EMPTY = {
   refusedPcr:["","",""],
   law:["","",""],
   cars:[{model:"",plate:"",color:""},{model:"",plate:"",color:""},{model:"",plate:"",color:""},{model:"",plate:"",color:""},{model:"",plate:"",color:""},{model:"",plate:"",color:""}],
-  mutual:"", remarks:"", reportBy:"", pg:"1", pgOf:"1",
+  mutual:[], mutualDir:"", remarks:"", reportBy:"", pg:"1", pgOf:"1", signature:"",
 };
 
 // ══════════════════════════════
@@ -452,6 +452,23 @@ function inp(value, onInput, opts={}) {
   el.className = 'inp';
   if (opts.style) Object.assign(el.style, opts.style);
   el.addEventListener('input', e => { onInput(e.target.value); });
+  return el;
+}
+
+// Like inp but does NOT call onChange on every keystroke — only on blur/change.
+// Use this inside functions that re-render their parent container on save,
+// so the input field isn't destroyed mid-typing.
+function stableInp(value, onChange, opts={}) {
+  const el = document.createElement('input');
+  el.type = opts.type || 'text';
+  el.value = value || '';
+  el.placeholder = opts.placeholder || '';
+  el.className = 'inp';
+  if (opts.style) Object.assign(el.style, opts.style);
+  // Save on blur (when user leaves the field)
+  el.addEventListener('blur', e => { onChange(e.target.value); });
+  // Also save on Enter key
+  el.addEventListener('keydown', e => { if (e.key === 'Enter') el.blur(); });
   return el;
 }
 
@@ -578,10 +595,10 @@ function ambRow(i, renderFn) {
     pcrLbl.textContent = 'PCR #';
     pcrLbl.style.marginBottom = '4px';
     wrap.appendChild(pcrLbl);
-    const pcrInp = inp(a.pcr || '', v => {
+    const pcrInp = stableInp(a.pcr || '', v => {
       F.amb[i].pcr = v;
       saveForm();
-      if (renderFn) renderFn(); // reveal next ambulance row when PCR started
+      if (renderFn) renderFn();
     }, {placeholder:'PCR number…'});
     wrap.appendChild(pcrInp);
   }
@@ -660,7 +677,7 @@ function tabEMS() {
       rl.style.marginBottom = '4px';
       rl.textContent = `Refused Transport PCR #${i + 1}`;
       rowWrap.appendChild(rl);
-      const ri = inp(F.refusedPcr[i] || '', v => {
+      const ri = stableInp(F.refusedPcr[i] || '', v => {
         F.refusedPcr[i] = v;
         saveForm();
         renderRefused();
@@ -760,6 +777,148 @@ function tabIncident() {
   locCard.appendChild(locTitle);
   locCard.appendChild(locCardBody);
   wrap.appendChild(locCard);
+
+  // ── Mutual Aid card — progressive multi-select up to 12 ──
+  const MUTUAL_AGENCIES = [
+    "Throop Fire","Cayuga Fire","Seneca Falls Fire","Owasco Fire",
+    "Auburn Fire","Union Springs Fire","Port Byron Fire","Weedsport Fire",
+    "Fleming Fire","Montezuma Fire","Aurora Fire","Other"
+  ];
+
+  if (!Array.isArray(F.mutual)) F.mutual = F.mutual ? [F.mutual] : [];
+
+  const mutualCard = document.createElement('div');
+  mutualCard.className = 'card';
+  const mutualTitle = document.createElement('div');
+  mutualTitle.className = 'card-title';
+  mutualTitle.textContent = 'Mutual Aid';
+  const mutualBody = document.createElement('div');
+  mutualBody.className = 'card-body';
+
+  // Given / Received direction
+  const mutualDirLbl = document.createElement('div');
+  mutualDirLbl.className = 'lbl';
+  mutualDirLbl.textContent = 'Given or Received';
+  mutualDirLbl.style.marginBottom = '4px';
+  mutualBody.appendChild(mutualDirLbl);
+  const mutualDirSel = sel(F.mutualDir||'', [
+    ["","— Select —"],
+    ["Given","Given (we assisted them)"],
+    ["Received","Received (they assisted us)"],
+    ["Both","Both"]
+  ], v=>{ F.mutualDir=v; saveForm(); });
+  Object.assign(mutualDirSel.style, UNI, {marginBottom:'12px'});
+  mutualBody.appendChild(mutualDirSel);
+
+  // Agency list container
+  const agencyListDiv = document.createElement('div');
+  mutualBody.appendChild(agencyListDiv);
+
+  function renderMutualAgencies() {
+    agencyListDiv.innerHTML = '';
+
+    // Show existing entries + one new blank slot (if < 12)
+    const entries = [...F.mutual];
+    const showCount = Math.min(entries.length + 1, 12);
+
+    for (let i = 0; i < showCount; i++) {
+      const current = entries[i] || '';
+      const isCustom = current && !MUTUAL_AGENCIES.includes(current);
+
+      const rowDiv = document.createElement('div');
+      rowDiv.style.marginBottom = '10px';
+
+      const rowLbl = document.createElement('div');
+      rowLbl.className = 'lbl';
+      rowLbl.style.marginBottom = '4px';
+      rowLbl.textContent = i === 0 ? 'Agency' : `Agency ${i + 1}`;
+      rowDiv.appendChild(rowLbl);
+
+      // Agency dropdown
+      const agSel = document.createElement('select');
+      agSel.className = 'sel';
+      agSel.style.marginBottom = '6px';
+      const blankOpt = document.createElement('option');
+      blankOpt.value = ''; blankOpt.textContent = '— Select Agency —';
+      agSel.appendChild(blankOpt);
+      for (const a of MUTUAL_AGENCIES) {
+        const o = document.createElement('option');
+        o.value = a; o.textContent = a;
+        if (a === current || (a === 'Other' && isCustom)) o.selected = true;
+        agSel.appendChild(o);
+      }
+      rowDiv.appendChild(agSel);
+
+      // Custom text box
+      const custInp = document.createElement('input');
+      custInp.type = 'text';
+      custInp.className = 'inp';
+      custInp.placeholder = 'Enter agency name…';
+      custInp.style.marginBottom = '4px';
+      custInp.style.display = (current === 'Other' || isCustom) ? 'block' : 'none';
+      custInp.value = isCustom ? current : '';
+
+      agSel.addEventListener('change', () => {
+        if (agSel.value === 'Other') {
+          custInp.style.display = 'block';
+          custInp.focus();
+          F.mutual[i] = '';
+        } else {
+          custInp.style.display = 'none';
+          custInp.value = '';
+          F.mutual[i] = agSel.value;
+          // Remove trailing empty entries
+          while (F.mutual.length > 0 && !F.mutual[F.mutual.length-1]) F.mutual.pop();
+          saveForm();
+          renderMutualAgencies();
+        }
+      });
+
+      // Use blur so keyboard stays open
+      custInp.addEventListener('blur', () => {
+        F.mutual[i] = custInp.value.trim();
+        while (F.mutual.length > 0 && !F.mutual[F.mutual.length-1]) F.mutual.pop();
+        saveForm();
+        renderMutualAgencies();
+      });
+      custInp.addEventListener('keydown', e => { if(e.key==='Enter') custInp.blur(); });
+
+      rowDiv.appendChild(custInp);
+
+      // Remove button (only for filled entries)
+      if (current) {
+        const removeBtn = document.createElement('button');
+        removeBtn.textContent = '✕ Remove';
+        removeBtn.style.cssText = 'background:none;border:none;color:#8b0000;font-size:12px;cursor:pointer;padding:0;margin-top:2px;font-family:Georgia,serif';
+        removeBtn.addEventListener('click', () => {
+          F.mutual.splice(i, 1);
+          saveForm();
+          renderMutualAgencies();
+        });
+        rowDiv.appendChild(removeBtn);
+      }
+
+      agencyListDiv.appendChild(rowDiv);
+    }
+
+    if (F.mutual.length >= 12) {
+      const cap = document.createElement('div');
+      cap.style.cssText = 'font-size:11px;color:#aaa;margin-top:4px';
+      cap.textContent = 'Maximum 12 agencies reached.';
+      agencyListDiv.appendChild(cap);
+    } else if (F.mutual.length > 0) {
+      const hint = document.createElement('div');
+      hint.style.cssText = 'font-size:11px;color:#aaa;margin-top:4px';
+      hint.textContent = 'Select an agency above to add another.';
+      agencyListDiv.appendChild(hint);
+    }
+  }
+
+  renderMutualAgencies();
+
+  mutualCard.appendChild(mutualTitle);
+  mutualCard.appendChild(mutualBody);
+  wrap.appendChild(mutualCard);
 
   return wrap;
 }
@@ -1225,17 +1384,25 @@ function lawRow(idx, renderFn) {
       : agencySel.value;
     F.law[idx] = ag ? ag + '||' + detailInp.value : '';
     saveForm();
-    if (renderFn) renderFn(); // re-render law section to show/hide next row
+    // Only trigger re-render from the dropdown change, not from text fields
+  }
+
+  function saveAndRender() {
+    save();
+    if (renderFn) renderFn();
   }
 
   agencySel.addEventListener('change', () => {
     customAgency.style.display = agencySel.value === 'Other' ? 'block' : 'none';
     detailInp.style.display = agencySel.value ? 'block' : 'none';
     if (agencySel.value !== 'Other') customAgency.value = '';
-    save();
+    saveAndRender();
   });
-  customAgency.addEventListener('input', save);
-  detailInp.addEventListener('input', save);
+  // Use blur not input — so keyboard stays open while typing
+  customAgency.addEventListener('blur',  save);
+  customAgency.addEventListener('keydown', e => { if(e.key==='Enter') customAgency.blur(); });
+  detailInp.addEventListener('blur',  saveAndRender);
+  detailInp.addEventListener('keydown', e => { if(e.key==='Enter') detailInp.blur(); });
 
   wrap.appendChild(agencySel);
   wrap.appendChild(customAgency);
@@ -1305,10 +1472,7 @@ function tabMVA() {
       // Plate and Color
       const plateCol = flexCol(1,
         lbl('Plate #'),
-        (() => {
-          const el = inp(F.cars[i].plate, v => { F.cars[i].plate = v; saveForm(); renderVehicles(); });
-          return el;
-        })()
+        stableInp(F.cars[i].plate, v => { F.cars[i].plate = v; saveForm(); renderVehicles(); }, {placeholder:'Plate #'})
       );
 
       const colorCol = document.createElement('div');
@@ -1440,15 +1604,96 @@ function tabRemarks() {
   injCard.appendChild(injBody);
   wrap.appendChild(injCard);
 
-  // ── Mutual Aid ───────────────────────────────────────────
-  wrap.appendChild(card('Mutual Aid',
-    field('', inp(F.mutual, v=>{F.mutual=v;saveForm();}, {placeholder:'Given or received from…'}))
-  ));
+  // ── Report Signature — touch/mouse canvas pad ────────────
+  const sigCard = document.createElement('div');
+  sigCard.className = 'card';
+  const sigTitle = document.createElement('div');
+  sigTitle.className = 'card-title';
+  sigTitle.textContent = 'Report Signature';
+  const sigBody = document.createElement('div');
+  sigBody.className = 'card-body';
 
-  // ── Report Signature ─────────────────────────────────────
-  wrap.appendChild(card('Report Signature',
-    field('Report By', inp(F.reportBy, v=>{F.reportBy=v;saveForm();}))
-  ));
+  const sigLbl = document.createElement('div');
+  sigLbl.className = 'lbl';
+  sigLbl.style.marginBottom = '6px';
+  sigLbl.textContent = 'Sign below with your finger or stylus';
+  sigBody.appendChild(sigLbl);
+
+  const canvas = document.createElement('canvas');
+  canvas.width = 580;
+  canvas.height = 140;
+  Object.assign(canvas.style, {
+    width:'100%', height:'140px', border:'1.5px solid #c8a97a',
+    borderRadius:'8px', background:'#fff8f0', display:'block',
+    touchAction:'none', cursor:'crosshair'
+  });
+
+  // Restore saved signature if any
+  if (F.signature) {
+    const img = new Image();
+    img.onload = () => { canvas.getContext('2d').drawImage(img,0,0); };
+    img.src = F.signature;
+  }
+
+  const ctx = canvas.getContext('2d');
+  ctx.strokeStyle = '#1a1a1a';
+  ctx.lineWidth = 2.5;
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+
+  let drawing = false;
+  let lastX = 0, lastY = 0;
+
+  function getPos(e) {
+    const r = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / r.width;
+    const scaleY = canvas.height / r.height;
+    const src = e.touches ? e.touches[0] : e;
+    return [(src.clientX - r.left) * scaleX, (src.clientY - r.top) * scaleY];
+  }
+
+  canvas.addEventListener('mousedown',  e => { drawing=true; [lastX,lastY]=getPos(e); });
+  canvas.addEventListener('touchstart', e => { e.preventDefault(); drawing=true; [lastX,lastY]=getPos(e); }, {passive:false});
+
+  function draw(e) {
+    if (!drawing) return;
+    e.preventDefault && e.preventDefault();
+    const [x,y] = getPos(e);
+    ctx.beginPath();
+    ctx.moveTo(lastX,lastY);
+    ctx.lineTo(x,y);
+    ctx.stroke();
+    [lastX,lastY] = [x,y];
+  }
+  canvas.addEventListener('mousemove',  draw);
+  canvas.addEventListener('touchmove',  draw, {passive:false});
+
+  function stopDraw() {
+    if (!drawing) return;
+    drawing = false;
+    F.signature = canvas.toDataURL();
+    saveForm();
+  }
+  canvas.addEventListener('mouseup',   stopDraw);
+  canvas.addEventListener('mouseleave',stopDraw);
+  canvas.addEventListener('touchend',  stopDraw);
+
+  sigBody.appendChild(canvas);
+
+  // Clear button
+  const clearSig = document.createElement('button');
+  clearSig.textContent = '✕ Clear Signature';
+  clearSig.style.cssText = 'margin-top:8px;background:none;border:1.5px solid #c8a97a;border-radius:6px;padding:6px 14px;font-size:13px;color:#8b0000;cursor:pointer;font-family:Georgia,serif';
+  clearSig.addEventListener('click', () => {
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+    F.signature = '';
+    saveForm();
+  });
+  sigBody.appendChild(clearSig);
+
+  sigCard.appendChild(sigTitle);
+  sigCard.appendChild(sigBody);
+  wrap.appendChild(sigCard);
 
   return wrap;
 }
@@ -1743,9 +1988,10 @@ function buildPrintHTML() {
       ${usedRefused.join(' &nbsp;|&nbsp; ')}
     </div>` : ''}
 
-    ${F.mutual ? `
+    ${(Array.isArray(F.mutual) ? F.mutual : [F.mutual]).filter(Boolean).length ? `
     <div style="font-size:8pt;margin-bottom:10px">
-      <b style="color:#8b0000">Mutual Aid:</b> ${F.mutual}
+      <b style="color:#8b0000">Mutual Aid ${F.mutualDir ? '('+F.mutualDir+')' : ''}:</b>
+      ${(Array.isArray(F.mutual) ? F.mutual : [F.mutual]).filter(Boolean).join(', ')}
     </div>` : ''}
 
     <!-- Remarks -->
@@ -1763,7 +2009,9 @@ function buildPrintHTML() {
     <div class="page-footer">
       <span>Aurelius Fire &amp; Rescue — Run Report ${F.runNum||''}</span>
       <span>IC: ${icName||'—'}</span>
-      <span>Report by: ${F.reportBy||'___________________________'}</span>
+      <span>${F.signature
+        ? `Report by: <img src="${F.signature}" style="height:28px;vertical-align:middle;border-bottom:1px solid #aaa">`
+        : 'Report by: ___________________________'}</span>
     </div>
   </div>
 
